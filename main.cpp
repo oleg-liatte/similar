@@ -88,6 +88,8 @@ namespace
 "-o, --out <file>\n"
 "    Dump output to a given file instead of stdout. In this case stdout is used\n";
 "    to display a progress.\n";
+"-h, --help\n"
+"    Show this help and exit.\n";
 	}
 	
 	template<typename T>
@@ -214,6 +216,12 @@ int main(int argc, char** argv)
 			.val = 'o'
 		},
 		{
+			.name = "help",
+			.has_arg = no_argument,
+			.flag = nullptr,
+			.val = 'h'
+		},
+		{
 			.name = nullptr,
 			.has_arg = 0,
 			.flag = nullptr,
@@ -251,7 +259,21 @@ int main(int argc, char** argv)
 		case 'o':
 			outFile = optarg;
 			break;
+
+		case 'h':
+			showHelp();
+			return 0;
+		
+		default:
+			showHelp();
+			return 1;
 		}
+	}
+	
+	if(optind == argc)
+	{
+		showHelp();
+		return 1;
 	}
 	
 	std::ofstream outStream;
