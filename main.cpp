@@ -4,7 +4,6 @@
 #include <string>
 #include <stdexcept>
 #include <unordered_map>
-#include <thread>
 
 #include <getopt.h>
 

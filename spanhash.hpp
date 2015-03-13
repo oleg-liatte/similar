@@ -6,6 +6,10 @@
 #include "hasher.hpp"
 
 
+/**
+ * Helper class to compare two files and calculate their similarity.
+ * Based on algorithm from git (http://git-scm.com/).
+ */
 class SpanHash
 {
 public:

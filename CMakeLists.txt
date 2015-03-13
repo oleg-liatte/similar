@@ -23,3 +23,4 @@ endif()
 
 add_executable(similar ${SRC})
 
+install(TARGETS similar DESTINATION /usr/bin)
