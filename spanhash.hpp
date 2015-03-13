@@ -10,12 +10,12 @@ class SpanHash
 {
 public:
 	SpanHash();
-	explicit SpanHash(const char* fileName);
+	SpanHash(const char* fileName, bool binary);
 	SpanHash(SpanHash&& that);
 
 	SpanHash& operator=(SpanHash&& that);
 	
-	void init(const char* fileName);
+	void init(const char* fileName, bool binary);
 	
 	float compare(const SpanHash& that) const;
 	

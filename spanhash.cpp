@@ -4,45 +4,6 @@
 #include <stdexcept>
 
 
-namespace
-{
-
-	bool isBinary(std::istream& stream)
-	{
-		auto orig = stream.tellg();
-		if(orig == -1)
-		{
-			// assume unseekable stream is binary
-			return true;
-		}
-
-		// read up to 1024 bytes
-		const size_t MAX_READ = 1024;
-		bool result = false;
-		for(size_t i = 0; i != MAX_READ; ++i)
-		{
-			int ch = stream.get();
-			if(ch == EOF)
-			{
-				break;
-			}
-
-			if(!std::isprint(ch) && !std::isspace(ch))
-			{
-				result = true;
-				break;
-			}
-		}
-
-		stream.clear(std::ios_base::eofbit);
-		stream.seekg(orig);
-
-		return result;
-	}
-
-}
-
-
 SpanHash::SpanHash():
 	size_(0),
 	entries_()
@@ -50,11 +11,11 @@ SpanHash::SpanHash():
 }
 
 
-SpanHash::SpanHash(const char* fileName):
+SpanHash::SpanHash(const char* fileName, bool binary):
 	size_(0),
 	entries_()
 {
-	init(fileName);
+	init(fileName, binary);
 }
 
 
@@ -79,25 +40,23 @@ SpanHash& SpanHash::operator=(SpanHash&& that)
 }
 
 
-void SpanHash::init(const char* fileName)
+void SpanHash::init(const char* fileName, bool binary)
 {
 	std::ifstream stream(fileName, std::ios_base::in | std::ios_base::binary);
 	if(!stream.is_open())
 	{
-		throw std::runtime_error(std::string("failed to open file: ") + fileName);
+		throw std::runtime_error(std::string("failed to open file: '") + fileName + "'");
 	}
 
 	size_ = 0;
 	entries_.clear();
 
-	bool is_text = !isBinary(stream);
-
 	int n = 0;
 	Hasher hasher;
 	for(int c = stream.get(), next = stream.get(); c != EOF; c = next, next = stream.get())
 	{
-		// Ignore CR in CRLF sequence if text
-		if (is_text && c == '\r' && next == '\n')
+		// ignore CR in CRLF sequence if text
+		if(!binary && c == '\r' && next == '\n')
 		{
 			continue;
 		}

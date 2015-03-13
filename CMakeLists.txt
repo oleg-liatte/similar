@@ -12,6 +12,7 @@ set(SRC
 	spanhash.cpp
 	SHA1.cpp
 	progress.cpp
+	match_map.cpp
 )
 
 message(STATUS "CMAKE_SYSTEM_NAME: ${CMAKE_SYSTEM_NAME}")

@@ -28,11 +28,29 @@ namespace
 class DirectoryLister::Data
 {
 public:
-	explicit Data(std::string&& path):
-		path_(std::move(path)),
-		isFile_(!isDir(path_.c_str())),
+	explicit Data(const char* path):
+		path_(),
+		isFile_(false),
 		dir_(nullptr)
 	{
+		size_t len = strlen(path);
+		bool hasTrailingSlash = false;
+		while(len > 0)
+		{
+			const char c = path[len - 1];
+			if(c == '/' || c == '\\')
+			{
+				hasTrailingSlash = true;
+				len -= 1;
+			}
+			else
+			{
+				break;
+			}
+		}
+		
+		path_.assign(path, path + len);
+		isFile_ = !hasTrailingSlash && !isDir(path_.c_str());
 		memset(&dirent_, 0, sizeof(dirent_));
 
 		if(!isFile_)

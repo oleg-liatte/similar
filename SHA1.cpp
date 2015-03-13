@@ -139,7 +139,7 @@ void CSHA1::Update(const UINT_8* pbData, UINT_32 uLen)
 }
 
 #ifdef SHA1_UTILITY_FUNCTIONS
-bool CSHA1::HashFile(const TCHAR* tszFileName)
+size_t CSHA1::HashFile(const TCHAR* tszFileName)
 {
 	if(tszFileName == NULL) return false;
 
@@ -149,24 +149,30 @@ bool CSHA1::HashFile(const TCHAR* tszFileName)
 	UINT_8* pbData = new UINT_8[SHA1_MAX_FILE_BUFFER];
 	if(pbData == NULL) { fclose(fpIn); return false; }
 
-	bool bSuccess = true;
+	size_t totalSize = 0;
 	while(true)
 	{
 		const size_t uRead = fread(pbData, 1, SHA1_MAX_FILE_BUFFER, fpIn);
 
 		if(uRead > 0)
+		{
 			Update(pbData, static_cast<UINT_32>(uRead));
+			totalSize += uRead;
+		}
 
 		if(uRead < SHA1_MAX_FILE_BUFFER)
 		{
-			if(feof(fpIn) == 0) bSuccess = false;
+			if(feof(fpIn) == 0)
+			{
+				totalSize = -1;
+			}
 			break;
 		}
 	}
 
 	fclose(fpIn);
 	delete[] pbData;
-	return bSuccess;
+	return totalSize;
 }
 #endif
 

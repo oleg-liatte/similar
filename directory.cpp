@@ -10,6 +10,7 @@ public:
 		dirs_()
 	{
 		push(path);
+		advanceToFile();
 	}
 	
 	std::string current() const
@@ -26,27 +27,10 @@ public:
 	
 	void next()
 	{
-		while(auto d = dir())
+		if(auto d = dir())
 		{
 			d->next();
-			
-			if(!d->isValid())
-			{
-				pop();
-				continue;
-			}
-
-			if(!d->currentIsDirectory())
-			{
-				// current is file
-				return;
-			}
-
-			// current is directory
-			if(push(d->current().c_str()))
-			{
-				return;
-			}
+			advanceToFile();
 		}
 	}
 	
@@ -95,16 +79,9 @@ private:
 		}
 	}
 
-	bool push(const char* path)
+	void push(const char* path)
 	{
 		dirs_.emplace_back(path);
-		if(dirs_.back().isValid())
-		{
-			return true;
-		}
-
-		dirs_.pop_back();
-		return false;
 	}
 	
 	void pop()
@@ -112,6 +89,31 @@ private:
 		dirs_.pop_back();
 	}
 
+	void advanceToFile()
+	{
+		while(auto d = dir())
+		{
+			if(!d->isValid())
+			{
+				pop();
+				
+				if(auto d = dir())
+				{
+					d->next();
+				}
+				
+				continue;
+			}
+
+			if(!d->currentIsDirectory())
+			{
+				break;
+			}
+
+			push(d->current().c_str());
+		}
+	}
+	
 	bool isValid() const
 	{
 		if(this == nullptr)

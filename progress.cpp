@@ -73,7 +73,7 @@ void Progress::flush(clock::time_point now)
 	std::ostream& out = std::cout;
 
 	auto oldFlags = out.setf(std::ios_base::fixed, std::ios_base::floatfield);
-	auto oldPrecision = out.precision(1);
+	auto oldPrecision = out.precision(2);
 
 	out
 		<< "\x1b[2K\r" // erase whole line
