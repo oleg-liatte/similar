@@ -15,8 +15,7 @@ set(SRC
 	match_map.cpp
 )
 
-message(STATUS "CMAKE_SYSTEM_NAME: ${CMAKE_SYSTEM_NAME}")
-if("${CMAKE_SYSTEM_NAME}" STREQUAL "CYGWIN")
+if(NOT "${CMAKE_SYSTEM_NAME}" STREQUAL "Windows")
 	set(SRC ${SRC}
 		directory_lister_unix.cpp
 	)
