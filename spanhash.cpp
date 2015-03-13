@@ -55,10 +55,15 @@ void SpanHash::init(const char* fileName, bool binary)
 	Hasher hasher;
 	for(int c = stream.get(), next = stream.get(); c != EOF; c = next, next = stream.get())
 	{
-		// ignore CR in CRLF sequence if text
+		// don't distinguish between CR, LF, and CRLF
 		if(!binary && c == '\r' && next == '\n')
 		{
 			continue;
+		}
+
+		if(c == '\r')
+		{
+			c = '\n';
 		}
 
 		size_ += 1;
