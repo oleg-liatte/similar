@@ -6,25 +6,26 @@
 class Directory::iterator::Data
 {
 public:
-	explicit Data(const char* path):
-		dirs_()
+	Data(const char* path, unsigned flags):
+		dirs_(),
+		flags_(flags)
 	{
 		push(path);
 		advanceToFile();
 	}
-	
+
 	std::string current() const
 	{
 		if(auto d = dir())
 		{
-			return d->current();
+			return d->currentName();
 		}
 		else
 		{
 			return std::string();
 		}
 	}
-	
+
 	void next()
 	{
 		if(auto d = dir())
@@ -33,7 +34,7 @@ public:
 			advanceToFile();
 		}
 	}
-	
+
 	bool operator==(const Data& that) const
 	{
 		bool thisIsValid = isValid();
@@ -51,9 +52,10 @@ public:
 
 		return dirs_ == that.dirs_;
 	}
-	
+
 private:
 	std::vector<DirectoryLister> dirs_;
+	unsigned flags_;
 
 	const DirectoryLister* dir() const
 	{
@@ -81,9 +83,9 @@ private:
 
 	void push(const char* path)
 	{
-		dirs_.emplace_back(path);
+		dirs_.emplace_back(path, flags_ & FollowSymlinks);
 	}
-	
+
 	void pop()
 	{
 		dirs_.pop_back();
@@ -96,24 +98,33 @@ private:
 			if(!d->isValid())
 			{
 				pop();
-				
+
 				if(auto d = dir())
 				{
 					d->next();
 				}
-				
+
 				continue;
 			}
 
-			if(!d->currentIsDirectory())
+			auto type = d->currentType();
+
+			if(type == DirectoryLister::RegularFile)
 			{
 				break;
 			}
 
-			push(d->current().c_str());
+			if(type == DirectoryLister::Directory)
+			{
+				push(d->currentName().c_str());
+			}
+			else
+			{
+				d->next();
+			}
 		}
 	}
-	
+
 	bool isValid() const
 	{
 		if(this == nullptr)
@@ -124,7 +135,7 @@ private:
 		auto d = dir();
 		return d && d->isValid();
 	}
-	
+
 };
 
 
@@ -144,8 +155,8 @@ Directory::iterator::iterator(const iterator& that):
 }
 
 
-Directory::iterator::iterator(const char* path):
-	data_(std::make_shared<Data>(path))
+Directory::iterator::iterator(const char* path, unsigned flags):
+	data_(std::make_shared<Data>(path, flags))
 {
 	// nop
 }
@@ -182,7 +193,7 @@ Directory::iterator& Directory::iterator::operator++()
 	{
 		data_->next();
 	}
-	
+
 	return *this;
 }
 
@@ -203,15 +214,16 @@ void Directory::iterator::detach()
 
 ////////////////////////////////////////////////////////////////////////////////
 
-Directory::Directory(const char* path):
-	path_(path)
+Directory::Directory(const char* path, unsigned flags):
+	path_(path),
+	flags_(flags)
 {
 }
 
 
 Directory::iterator Directory::begin()
 {
-	return iterator(path_.c_str());
+	return iterator(path_.c_str(), flags_);
 }
 
 

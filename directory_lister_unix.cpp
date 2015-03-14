@@ -11,27 +11,19 @@
 namespace
 {
 
-	bool isDir(const char* path)
-	{
-		struct stat buf;
-		if(lstat(path, &buf) != 0)
-		{
-			return false;
-		}
-		
-		return S_ISDIR(buf.st_mode);
-	}
-	
+	typedef int (*StatFn)(const char* file, struct stat* buf);
+
 }
 
 
 class DirectoryLister::Data
 {
 public:
-	explicit Data(const char* path):
+	Data(const char* path, bool followSymlinks):
 		path_(),
 		isFile_(false),
-		dir_(nullptr)
+		dir_(nullptr),
+		statFn_(followSymlinks ? &stat : &lstat)
 	{
 		size_t len = strlen(path);
 		bool hasTrailingSlash = false;
@@ -48,7 +40,7 @@ public:
 				break;
 			}
 		}
-		
+
 		path_.assign(path, path + len);
 		isFile_ = !hasTrailingSlash && !isDir(path_.c_str());
 		memset(&dirent_, 0, sizeof(dirent_));
@@ -59,7 +51,7 @@ public:
 			next();
 		}
 	}
-	
+
 	Data(const Data& that):
 		path_(),
 		isFile_(false),
@@ -67,7 +59,7 @@ public:
 	{
 		*this = that;
 	}
-	
+
 	~Data()
 	{
 		clear();
@@ -76,7 +68,7 @@ public:
 	Data& operator=(const Data& that)
 	{
 		clear();
-		
+
 		path_ = that.path_;
 		isFile_ = that.isFile_;
 
@@ -106,7 +98,7 @@ public:
 		return path_;
 	}
 
-	std::string current() const
+	std::string currentName() const
 	{
 		if(isFile_)
 		{
@@ -123,15 +115,43 @@ public:
 		}
 	}
 
-	bool currentIsDirectory() const
+	DirectoryLister::FileType currentType() const
 	{
-		if(!isFile_ && dir_)
+		if(isFile_)
 		{
-			return dirent_.d_type == DT_DIR;
+			return DirectoryLister::RegularFile;
 		}
-		else
+
+		if(!dir_)
 		{
-			return false;
+			return DirectoryLister::Unknown;
+		}
+
+		switch(dirent_.d_type)
+		{
+		case DT_REG:
+			return DirectoryLister::RegularFile;
+
+		case DT_DIR:
+			return DirectoryLister::Directory;
+
+		case DT_LNK:
+			return DirectoryLister::Link;
+
+		case DT_BLK:
+			return DirectoryLister::Block;
+
+		case DT_CHR:
+			return DirectoryLister::Char;
+
+		case DT_FIFO:
+			return DirectoryLister::FIFO;
+
+		case DT_SOCK:
+			return DirectoryLister::Socket;
+
+		default:
+			return DirectoryLister::Unknown;
 		}
 	}
 
@@ -156,7 +176,7 @@ public:
 				clear();
 				break;
 			}
-			
+
 			if(strcmp(dirent_.d_name, ".") != 0 && strcmp(dirent_.d_name, "..") != 0)
 			{
 				break;
@@ -176,6 +196,7 @@ private:
 	bool isFile_;
 	DIR* dir_;
 	dirent dirent_;
+	StatFn statFn_;
 
 	void clear()
 	{
@@ -190,11 +211,22 @@ private:
 		memset(&dirent_, 0, sizeof(dirent_));
 	}
 
+	bool isDir(const char* path) const
+	{
+		struct stat buf;
+		if(statFn_(path, &buf) != 0)
+		{
+			return false;
+		}
+
+		return S_ISDIR(buf.st_mode);
+	}
+
 };
 
 
-DirectoryLister::DirectoryLister(const char* path):
-	data_(std::make_shared<Data>(path))
+DirectoryLister::DirectoryLister(const char* path, bool followSymlinks):
+	data_(std::make_shared<Data>(path, followSymlinks))
 {
 	// nop
 }
@@ -225,14 +257,14 @@ const std::string& DirectoryLister::path() const
 	return data_->path();
 }
 
-std::string DirectoryLister::current() const
+std::string DirectoryLister::currentName() const
 {
-	return data_->current();
+	return data_->currentName();
 }
 
-bool DirectoryLister::currentIsDirectory() const
+DirectoryLister::FileType DirectoryLister::currentType() const
 {
-	return data_->currentIsDirectory();
+	return data_->currentType();
 }
 
 void DirectoryLister::next()
