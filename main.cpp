@@ -35,13 +35,11 @@ namespace
 "destination use --all option.\n"
 "\n"
 "Options:\n"
-"-m, --min-similarity <index>\n"
+"-s, --min-similarity <index>\n"
 "    Minimum similarity index for files that can be considered similar. Valid\n"
 "    value range is [0 .. 1]. Default is 0.5.\n"
 "-a, --all\n"
 "    Display all sources with all destinations comparisons.\n"
-"-e, --exact\n"
-"    Search only exact matches.\n"
 "-o, --out <file>\n"
 "    Dump output to a given file instead of stdout. In this case stdout is used\n"
 "    to display a progress.\n"
@@ -222,19 +220,13 @@ int main(int argc, char** argv)
 			.name = "min-similarity",
 			.has_arg = required_argument,
 			.flag = nullptr,
-			.val = 'm'
+			.val = 's'
 		},
 		{
 			.name = "all",
 			.has_arg = no_argument,
 			.flag = nullptr,
 			.val = 'a'
-		},
-		{
-			.name = "exact",
-			.has_arg = no_argument,
-			.flag = nullptr,
-			.val = 'e'
 		},
 		{
 			.name = "out",
@@ -277,7 +269,7 @@ int main(int argc, char** argv)
 
 	while(true)
 	{
-		int c = getopt_long(argc, argv, "m:aeo:tlh", long_options, nullptr);
+		int c = getopt_long(argc, argv, "m:ao:tlh", long_options, nullptr);
 		if(c < 0)
 		{
 			break;
@@ -292,14 +284,11 @@ int main(int argc, char** argv)
 				showHelp();
 				return 1;
 			}
+			exactOnly == (minSimilarity == 1.0f);
 			break;
 
 		case 'a':
 			all = true;
-			break;
-
-		case 'e':
-			exactOnly = true;
 			break;
 
 		case 'o':
