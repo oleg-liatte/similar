@@ -1,5 +1,6 @@
 #include "spanhash.hpp"
 #include <utility>
+#include <iostream>
 #include <fstream>
 #include <stdexcept>
 
@@ -8,14 +9,6 @@ SpanHash::SpanHash():
 	size_(0),
 	entries_()
 {
-}
-
-
-SpanHash::SpanHash(const char* fileName, bool binary):
-	size_(0),
-	entries_()
-{
-	init(fileName, binary);
 }
 
 
@@ -40,12 +33,13 @@ SpanHash& SpanHash::operator=(SpanHash&& that)
 }
 
 
-void SpanHash::init(const char* fileName, bool binary)
+bool SpanHash::init(const char* fileName, bool binary)
 {
 	std::ifstream stream(fileName, std::ios_base::in | std::ios_base::binary);
 	if(!stream.is_open())
 	{
-		throw std::runtime_error(std::string("failed to open file: '") + fileName + "'");
+		std::cerr << "failed to open file: '" << fileName << "'" << std::endl;
+		return false;
 	}
 
 	size_ = 0;
@@ -78,6 +72,8 @@ void SpanHash::init(const char* fileName, bool binary)
 
 		n = 0;
 	}
+
+	return true;
 }
 
 

@@ -12,7 +12,6 @@ set(SRC
 	spanhash.cpp
 	SHA1.cpp
 	progress.cpp
-	match_map.cpp
 )
 
 if(NOT "${CMAKE_SYSTEM_NAME}" STREQUAL "Windows")
