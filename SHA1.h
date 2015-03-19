@@ -245,7 +245,7 @@ public:
 
 #ifdef SHA1_UTILITY_FUNCTIONS
 	// Hash in file contents
-	size_t HashFile(const TCHAR* tszFileName);
+	bool HashFile(const TCHAR* tszFileName);
 #endif
 
 	// Finalize hash; call it before using ReportHash(Stl)

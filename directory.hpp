@@ -1,74 +1,72 @@
-#ifndef DIRECTORY_HPP_INCLUDED
-#define DIRECTORY_HPP_INCLUDED
+#ifndef DIRECTORY_LISTER_HPP_INCLUDED
+#define DIRECTORY_LISTER_HPP_INCLUDED
 
 
-#include <string>
+#include <stddef.h> // for size_t
+#include <time.h> // for time_t
+
 #include <memory>
+#include <string>
 
 
 class Directory
 {
 public:
-	enum Flag
+	struct Stat
 	{
-		FollowSymlinks = 1
-	};
-
-	class iterator
-	{
-		friend class Directory; // allow access to constructor
-
-	public:
-		iterator();
-		iterator(const iterator& that);
-		~iterator();
-
-		iterator& operator=(const iterator& that);
-
-		std::string operator*() const;
-		iterator& operator++();
-
-		iterator operator++(int)
+		enum FileType
 		{
-			iterator tmp = *this;
-			++(*this);
-			return tmp;
+			Unknown,
+			Regular,
+			Directory,
+			Link,
+			Block,
+			Char,
+			FIFO,
+			Socket
+		};
+
+		Stat():
+			fileType(Unknown),
+			size(0),
+			atime(0),
+			mtime(0),
+			ctime(0)
+		{
 		}
 
-		bool operator==(const iterator& that) const;
-
-		bool operator!=(const iterator& that) const
-		{
-			return !(*this == that);
-		}
-
-	private:
-		iterator(const char* path, unsigned flags);
-
-		class Data;
-
-		std::shared_ptr<Data> data_;
-
-		void detach();
+		explicit Stat(const char* path, bool followSymlinks);
+		
+		FileType fileType;
+		size_t size;
+		time_t atime;
+		time_t mtime;
+		time_t ctime;
 
 	};
 
-	explicit Directory(const char* path, unsigned flags = 0);
+	Directory(const char* path, bool followSymlinks);
+	Directory(const Directory& that);
+	~Directory();
 
-	const std::string& path()
-	{
-		return path_;
-	}
+	Directory& operator=(const Directory& that);
 
-	iterator begin();
-	iterator end();
+	bool isValid() const;
+	const std::string& path() const;
+	const std::string& currentName() const;
+	const Stat& currentStat() const;
+	void next();
+
+	bool operator==(const Directory& that) const;
 
 private:
-	std::string path_;
-	unsigned flags_;
+	class Data;
+
+	std::shared_ptr<Data> data_;
+
+	void detach();
 
 };
 
 
 #endif
-

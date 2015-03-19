@@ -3,11 +3,12 @@ project(similar)
 
 cmake_policy(SET CMP0054 NEW) # Only interpret ``if()`` arguments as variables or keywords when unquoted.
 
-set(CMAKE_CXX_FLAGS "--std=c++11")
+set(CMAKE_CXX_FLAGS "--std=c++11 --lto")
+set(CMAKE_LINK_FLAGS "--lto")
 
 set(SRC
 	main.cpp
-	directory.cpp
+	directory_walker.cpp
 	hasher.cpp
 	spanhash.cpp
 	SHA1.cpp
@@ -16,7 +17,7 @@ set(SRC
 
 if(NOT "${CMAKE_SYSTEM_NAME}" STREQUAL "Windows")
 	set(SRC ${SRC}
-		directory_lister_unix.cpp
+		directory_unix.cpp
 	)
 endif()
 
