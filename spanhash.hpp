@@ -18,7 +18,8 @@ public:
 
 	SpanHash& operator=(SpanHash&& that);
 
-	bool empty() const;
+	bool isValid() const;
+	bool isEmpty() const;
 	bool init(const char* fileName, bool binary);
 	void clear();
 	
@@ -27,6 +28,7 @@ public:
 private:
 	typedef std::unordered_map<Hasher::Hash, size_t> Entries;
 
+	bool valid_;
 	size_t size_;
 	Entries entries_;
 

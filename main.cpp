@@ -6,6 +6,7 @@
 #include <vector>
 #include <unordered_set>
 #include <algorithm>
+#include <thread>
 
 #include <getopt.h>
 #include <assert.h>
@@ -15,6 +16,7 @@
 #include "directory_walker.hpp"
 #include "SHA1.h"
 #include "progress.hpp"
+#include "async_manager.hpp"
 
 
 namespace
@@ -174,6 +176,7 @@ namespace
 			binary_(false),
 			digest_(),
 			spanHash_(),
+			spanHashRefs_(0),
 			matches_()
 		{
 		}
@@ -184,8 +187,10 @@ namespace
 			binary_(that.binary_),
 			digest_(std::move(that.digest_)),
 			spanHash_(std::move(that.spanHash_)),
+			spanHashRefs_(that.spanHashRefs_),
 			matches_(std::move(that.matches_))
 		{
+			that.spanHashRefs_ = 0;
 		}
 
 		FileInfo& operator=(FileInfo&& that)
@@ -195,6 +200,8 @@ namespace
 			binary_ = that.binary_;
 			digest_ = std::move(that.digest_);
 			spanHash_ = std::move(that.spanHash_);
+			spanHashRefs_ = that.spanHashRefs_;
+			that.spanHashRefs_ = 0;
 			matches_ = std::move(that.matches_);
 		}
 
@@ -223,30 +230,42 @@ namespace
 			return spanHash_;
 		}
 
-		bool initSpanHash(bool* wasRead = nullptr)
+		void acquireSpanHash()
 		{
-			if(!spanHash_.empty())
+			if(spanHashRefs_ == -1)
 			{
-				if(wasRead)
-				{
-					*wasRead = false;
-				}
-				return true;
+				// counter overflow, don't increment it further
+				return;
 			}
 
-			if(wasRead)
+			spanHashRefs_ += 1;
+
+			if(spanHashRefs_ == 1)
 			{
-				*wasRead = true;
+				spanHash_.init(name_.c_str(), binary_);
 			}
-			return spanHash_.init(name_.c_str(), binary_);
 		}
 
-		void clearSpanHash()
+		void releaseSpanHash()
 		{
-			spanHash_.clear();
+			if(spanHashRefs_ == -1)
+			{
+				// counter overflow, don't ever release
+				return;
+			}
+
+			if(spanHashRefs_ > 0)
+			{
+				spanHashRefs_ -= 1;
+			}
+
+			if(spanHashRefs_ == 0)
+			{
+				spanHash_.clear();
+			}
 		}
 
-		bool read(bool readSpanHash)
+		bool read()
 		{
 			// check if file is binary
 			binary_ = fileIsBinary(name_.c_str());
@@ -262,12 +281,7 @@ namespace
 
 			sha1.GetHash(digest_.data());
 
-			if(!readSpanHash)
-			{
-				return true;
-			}
-
-			return spanHash_.init(name_.c_str(), binary_);
+			return true;
 		}
 
 		bool addMatch(FileInfo* that, float similarity)
@@ -359,6 +373,7 @@ namespace
 		bool binary_;
 		FileDigest digest_;
 		SpanHash spanHash_;
+		size_t spanHashRefs_;
 		std::vector<Match> matches_;
 
 		void removeMatch(FileInfo* that)
@@ -636,7 +651,7 @@ int main(int argc, char** argv)
 				showHelp();
 				return 1;
 			}
-			exactOnly == (minSimilarity == 1.0f);
+			exactOnly = (minSimilarity >= 1.0f);
 			break;
 
 		case 'a':
@@ -793,8 +808,7 @@ int main(int argc, char** argv)
 			FileList& list = dest ? destination_storage : source;
 			for(auto& fi: list)
 			{
-				bool ok = fi.read(dest);
-
+				bool ok = fi.read();
 				if(&list == &destination && ok)
 				{
 					// add file to digest index
@@ -917,11 +931,7 @@ int main(int argc, char** argv)
 				continue;
 			}
 
-			bool clearSrcSpanHash = false;
-			if(!src.initSpanHash(&clearSrcSpanHash))
-			{
-				continue;
-			}
+			src.acquireSpanHash(); // extra reference to avoid races inside loop
 
 			for(size_t dstIndex = 0; dstIndex != destination.size(); ++dstIndex)
 			{
@@ -961,37 +971,55 @@ int main(int argc, char** argv)
 					continue;
 				}
 
-				// exact matches were found before so these files can't be exactly the same
-				auto similarity = src.spanHash().compare(dst.spanHash()) * 0.99f;
-
-				if(similarity >= minSimilarity)
+				src.acquireSpanHash();
+				dst.acquireSpanHash();
+				if(!src.spanHash().isValid() || !dst.spanHash().isValid())
 				{
-					if(all)
+					continue;
+				}
+
+				AsyncManager::async([&, srcIndex, dstIndex]
+				{
+					// exact matches were found before so these files can't be exactly the same
+					auto similarity = src.spanHash().compare(dst.spanHash()) * 0.99f;
+
+					AsyncManager::sync([&, srcIndex, dstIndex, similarity]
 					{
-						out << similarity << "|" << src.name() << "|" << dst.name() << std::endl;
-						matchesCount += 1;
-					}
-					else
-					{
-						if(src.addMatch(&dst, similarity))
+						src.releaseSpanHash();
+						// dst.releaseSpanHash(); // don't release dst to avoid its re-read by the next src
+
+						if(similarity >= minSimilarity)
 						{
-							matchesCount += 1;
+							if(all)
+							{
+								out << similarity << "|" << src.name() << "|" << dst.name() << std::endl;
+								matchesCount += 1;
+							}
+							else
+							{
+								if(src.addMatch(&dst, similarity))
+								{
+									matchesCount += 1;
+								}
+							}
 						}
-					}
-				}
 
-				if(showProgress)
-				{
-					progress.setCurrent(static_cast<float>(destination.size()) * srcIndex + dstIndex + 1);
-					progress.update();
-				}
+						if(showProgress)
+						{
+							auto cur = std::max(progress.current(), static_cast<float>(destination.size()) * srcIndex + dstIndex + 1);
+							progress.setCurrent(cur);
+							progress.update();
+						}
+					});
+				});
+
+				AsyncManager::tick();
 			}
 
-			if(clearSrcSpanHash)
-			{
-				src.clearSpanHash();
-			}
+			src.releaseSpanHash(); // release extra reference
 		}
+
+		AsyncManager::joinAll();
 
 		if(showProgress)
 		{

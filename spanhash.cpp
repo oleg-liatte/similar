@@ -6,6 +6,7 @@
 
 
 SpanHash::SpanHash():
+	valid_(false),
 	size_(0),
 	entries_()
 {
@@ -13,9 +14,11 @@ SpanHash::SpanHash():
 
 
 SpanHash::SpanHash(SpanHash&& that):
+	valid_(that.valid_),
 	size_(that.size_),
 	entries_(std::move(that.entries_))
 {
+	that.valid_ = false;
 	that.size_ = 0;
 	that.entries_.clear();
 }
@@ -23,9 +26,11 @@ SpanHash::SpanHash(SpanHash&& that):
 
 SpanHash& SpanHash::operator=(SpanHash&& that)
 {
+	valid_ = that.valid_;
 	size_ = that.size_;
 	entries_ = std::move(that.entries_);
 
+	that.valid_ = false;
 	that.size_ = 0;
 	that.entries_.clear();
 
@@ -33,21 +38,28 @@ SpanHash& SpanHash::operator=(SpanHash&& that)
 }
 
 
-bool SpanHash::empty() const
+bool SpanHash::isEmpty() const
 {
 	return entries_.empty();
 }
 
 
+bool SpanHash::isValid() const
+{
+	return valid_;
+}
+
+
 bool SpanHash::init(const char* fileName, bool binary)
 {
+	valid_ = false;
 	size_ = 0;
 	entries_.clear();
 
 	std::ifstream stream(fileName, std::ios_base::in | std::ios_base::binary);
 	if(!stream.is_open())
 	{
-		std::cerr << "failed to open file: '" << fileName << "'" << std::endl;
+		std::cerr << "ERROR: failed to open file: '" << fileName << "'" << std::endl;
 		return false;
 	}
 
@@ -79,6 +91,7 @@ bool SpanHash::init(const char* fileName, bool binary)
 		n = 0;
 	}
 
+	valid_ = true;
 	return true;
 }
 
