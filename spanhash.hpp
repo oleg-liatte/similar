@@ -2,7 +2,7 @@
 #define SPANHASH_HPP_INCLUDED
 
 
-#include <map>
+#include <unordered_map>
 #include "hasher.hpp"
 
 
@@ -17,14 +17,18 @@ public:
 	SpanHash(SpanHash&& that);
 
 	SpanHash& operator=(SpanHash&& that);
-	
+
+	bool empty() const;
 	bool init(const char* fileName, bool binary);
+	void clear();
 	
 	float compare(const SpanHash& that) const;
 	
 private:
+	typedef std::unordered_map<Hasher::Hash, size_t> Entries;
+
 	size_t size_;
-	std::map<Hasher::Hash, size_t> entries_;
+	Entries entries_;
 
 };
 

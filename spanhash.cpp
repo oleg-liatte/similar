@@ -28,22 +28,28 @@ SpanHash& SpanHash::operator=(SpanHash&& that)
 
 	that.size_ = 0;
 	that.entries_.clear();
-	
+
 	return *this;
+}
+
+
+bool SpanHash::empty() const
+{
+	return entries_.empty();
 }
 
 
 bool SpanHash::init(const char* fileName, bool binary)
 {
+	size_ = 0;
+	entries_.clear();
+
 	std::ifstream stream(fileName, std::ios_base::in | std::ios_base::binary);
 	if(!stream.is_open())
 	{
 		std::cerr << "failed to open file: '" << fileName << "'" << std::endl;
 		return false;
 	}
-
-	size_ = 0;
-	entries_.clear();
 
 	int n = 0;
 	Hasher hasher;
@@ -61,13 +67,13 @@ bool SpanHash::init(const char* fileName, bool binary)
 		}
 
 		size_ += 1;
-		
+
 		hasher.push(static_cast<unsigned char>(c));
 		if(++n < 64 && c != '\n')
 		{
 			continue;
 		}
-		
+
 		entries_[hasher.stop()] += n;
 
 		n = 0;
@@ -77,51 +83,37 @@ bool SpanHash::init(const char* fileName, bool binary)
 }
 
 
+void SpanHash::clear()
+{
+	// not just clear() to ensure there is no pre-allocated memory left
+	Entries empty;
+	entries_.swap(empty);
+}
+
+
 float SpanHash::compare(const SpanHash& that) const
 {
 	if(size_ == 0 && that.size_ == 0)
 	{
 		return 1.0f;
 	}
-	
+
 	if(size_ == 0 || that.size_ == 0)
 	{
 		return 0.0f;
 	}
-	
+
 	size_t src_copied = 0;
 
-	auto thatIt = that.entries_.begin();
-	for(auto thisIt = entries_.begin(); thisIt != entries_.end(); ++thisIt)
+	for(const auto& thisEntry: entries_)
 	{
-		// unique that literals
-		while(thatIt != that.entries_.end() && thatIt->first < thisIt->first)
+		auto thatEntryIt = that.entries_.find(thisEntry.first);
+		if(thatEntryIt == that.entries_.end())
 		{
-			++thatIt;
-		}
-		
-		if(thatIt == that.entries_.end() || thatIt->first != thisIt->first)
-		{
-			// that literal doesn't match this one
 			continue;
 		}
 
-		if(thatIt->second > thisIt->second)
-		{
-			// there are more such literals than here
-			src_copied += thisIt->second;
-		}
-		else
-		{
-			src_copied += thatIt->second;
-		}
-
-		++thatIt;
-	}
-
-	while(thatIt != that.entries_.end())
-	{
-		++thatIt;
+		src_copied += std::min(thisEntry.second, thatEntryIt->second);
 	}
 
 	return

@@ -5,6 +5,7 @@
 #include <stdexcept>
 #include <vector>
 #include <unordered_set>
+#include <algorithm>
 
 #include <getopt.h>
 #include <assert.h>
@@ -74,7 +75,7 @@ namespace
 		return ss.rdstate() == std::ios_base::eofbit;
 	}
 
-	bool isBinary(const char* fileName)
+	bool fileIsBinary(const char* fileName)
 	{
 		std::ifstream stream(fileName, std::ios_base::in | std::ios_base::binary);
 		if(!stream.is_open())
@@ -152,127 +153,256 @@ namespace
 
 	};
 
-	struct FileInfo
+	class FileInfo
 	{
+	public:
+		struct Match
+		{
+			Match(FileInfo* fileInfo, float similarity):
+				fileInfo(fileInfo),
+				similarity(similarity)
+			{
+			}
+
+			FileInfo* fileInfo;
+			float similarity;
+		};
+
 		FileInfo(std::string&& name, size_t size):
-			name(std::move(name)),
-			size(size),
-			binary(false),
-			digest(),
-			match(nullptr),
-			matchSimilarity(0.0f)
+			name_(std::move(name)),
+			size_(size),
+			binary_(false),
+			digest_(),
+			spanHash_(),
+			matches_()
 		{
 		}
 
 		FileInfo(FileInfo&& that):
-			name(std::move(that.name)),
-			size(that.size),
-			binary(that.binary),
-			digest(std::move(that.digest)),
-			match(that.match),
-			matchSimilarity(that.matchSimilarity)
+			name_(std::move(that.name_)),
+			size_(that.size_),
+			binary_(that.binary_),
+			digest_(std::move(that.digest_)),
+			spanHash_(std::move(that.spanHash_)),
+			matches_(std::move(that.matches_))
 		{
 		}
 
 		FileInfo& operator=(FileInfo&& that)
 		{
-			name = std::move(that.name);
-			size = that.size;
-			binary = that.binary;
-			digest = std::move(that.digest);
-			match = that.match;
-			matchSimilarity = that.matchSimilarity;
+			name_ = std::move(that.name_);
+			size_ = that.size_;
+			binary_ = that.binary_;
+			digest_ = std::move(that.digest_);
+			spanHash_ = std::move(that.spanHash_);
+			matches_ = std::move(that.matches_);
 		}
 
-		bool read()
+		const std::string& name() const
+		{
+			return name_;
+		}
+
+		size_t size() const
+		{
+			return size_;
+		}
+
+		bool isBinary() const
+		{
+			return binary_;
+		}
+
+		const FileDigest& digest() const
+		{
+			return digest_;
+		}
+
+		const SpanHash& spanHash() const
+		{
+			return spanHash_;
+		}
+
+		bool initSpanHash(bool* wasRead = nullptr)
+		{
+			if(!spanHash_.empty())
+			{
+				if(wasRead)
+				{
+					*wasRead = false;
+				}
+				return true;
+			}
+
+			if(wasRead)
+			{
+				*wasRead = true;
+			}
+			return spanHash_.init(name_.c_str(), binary_);
+		}
+
+		void clearSpanHash()
+		{
+			spanHash_.clear();
+		}
+
+		bool read(bool readSpanHash)
 		{
 			// check if file is binary
-			binary = isBinary(name.c_str());
+			binary_ = fileIsBinary(name_.c_str());
 
 			// calculate file digest
 			CSHA1 sha1;
-			if(!sha1.HashFile(name.c_str()))
+			if(!sha1.HashFile(name_.c_str()))
 			{
-				std::cerr << "failed to read file: '" << name << "'" << std::endl;
+				std::cerr << "ERROR: failed to read file: '" << name_ << "'" << std::endl;
 				return false;
 			}
 			sha1.Final();
 
-			sha1.GetHash(digest.data());
+			sha1.GetHash(digest_.data());
 
-			return true;
+			if(!readSpanHash)
+			{
+				return true;
+			}
+
+			return spanHash_.init(name_.c_str(), binary_);
 		}
 
 		bool addMatch(FileInfo* that, float similarity)
 		{
-			if(similarity <= matchSimilarity || similarity <= that->matchSimilarity)
+			auto matchSortPredicate = [](const Match& l, const Match& r)
+			{
+				return l.similarity > r.similarity;
+			};
+
+			// check if that file is already here
+			auto existing = std::find_if(matches_.begin(), matches_.end(), [that](const Match& match)
+			{
+				return match.fileInfo == that;
+			});
+
+			if(existing != matches_.end())
 			{
 				return false;
 			}
 
-			bool added = (match == nullptr);
+			// find appropriate insertion position
+			const Match match(that, similarity);
+			auto pos = std::upper_bound(matches_.begin(), matches_.end(), match, matchSortPredicate);
 
-			if(match)
-			{
-				assert(match->match == this);
-				match->matchSimilarity = 0.0f;
-				match->match = nullptr;
-			}
+			// insert match
+			matches_.insert(pos, match);
 
-			if(that->match)
-			{
-				assert(that->match->match == that);
-				that->match->matchSimilarity = 0.0f;
-				that->match->match = nullptr;
-			}
+			that->addMatch(this, similarity);
 
-			match = that;
-			matchSimilarity = similarity;
-
-			that->match = this;
-			that->matchSimilarity = similarity;
-
-			return added;
+			return matches_.size() == 1; // we have added the first match
 		}
 
-		std::string name;
-		size_t size;
-		bool binary;
-		FileDigest digest;
-		FileInfo* match;
-		float matchSimilarity;
+		bool hasMatch() const
+		{
+			return !matches_.empty();
+		}
+
+		bool hasMatch(float similarity) const
+		{
+			if(!matches_.empty())
+			{
+				return matches_.front().similarity >= similarity;
+			}
+			else
+			{
+				return false;
+			}
+		}
+
+		bool takeMatch(float& similarity, FileInfo*& source, FileInfo*& destination)
+		{
+			if(matches_.empty())
+			{
+				return false;
+			}
+
+			source = this;
+
+			// find the first mutual match
+			for(size_t recursionCounter = 1000; recursionCounter != 0; --recursionCounter)
+			{
+				assert(!source->matches_.empty());
+				auto& sourceMatch = source->matches_.front();
+
+				destination = sourceMatch.fileInfo;
+				assert(!destination->matches_.empty());
+				auto& destinationMatch = destination->matches_.front();
+
+				if(destinationMatch.fileInfo == source)
+				{
+					similarity = sourceMatch.similarity;
+
+					source->clearMatches();
+					destination->clearMatches();
+
+					return true;
+				}
+
+				source = destinationMatch.fileInfo;
+			}
+
+			std::cerr << "ERROR: similarity chain seems to contain loop, this shouldn't have happen";
+			return false;
+		}
+
+	private:
+		std::string name_;
+		size_t size_;
+		bool binary_;
+		FileDigest digest_;
+		SpanHash spanHash_;
+		std::vector<Match> matches_;
+
+		void removeMatch(FileInfo* that)
+		{
+			auto match = std::find_if(matches_.begin(), matches_.end(), [that](const Match& match)
+			{
+				return match.fileInfo == that;
+			});
+
+			if(match == matches_.end())
+			{
+				return;
+			}
+
+			matches_.erase(match);
+		}
+
+		void clearMatches()
+		{
+			std::vector<Match> old;
+			matches_.swap(old);
+
+			for(const auto& match: old)
+			{
+				match.fileInfo->removeMatch(this);
+			}
+		}
+
 	};
 
 	struct DigestIndexPred
 	{
 		bool operator()(FileInfo* lhs, FileInfo* rhs) const
 		{
-			return lhs->digest == rhs->digest;
+			return lhs->digest() == rhs->digest();
 		}
 
 		size_t operator()(FileInfo* v) const
 		{
-			return v->digest.hash();
+			return v->digest().hash();
 		}
 	};
 
 	typedef std::unordered_multiset<FileInfo*, DigestIndexPred, DigestIndexPred> DigestIndex;
-
-	struct NameIndexPred
-	{
-		bool operator()(FileInfo* lhs, FileInfo* rhs) const
-		{
-			return lhs->name == rhs->name;
-		}
-
-		size_t operator()(FileInfo* v) const
-		{
-			static const std::hash<std::string> hashObj;
-			return hashObj(v->name);
-		}
-	};
-
-	typedef std::unordered_set<FileInfo*, NameIndexPred, NameIndexPred> NameIndex;
 
 	template<typename T>
 	const char* plural(T count, const char* postfix = "s")
@@ -364,7 +494,7 @@ namespace
 		std::ifstream ifs(p, std::ios_base::in | std::ios_base::binary);
 		if(!ifs.good())
 		{
-			std::cerr << "failed to open file: '" << p << "'" << std::endl;
+			std::cerr << "ERROR: failed to open file: '" << p << "'" << std::endl;
 			return;
 		}
 
@@ -502,7 +632,7 @@ int main(int argc, char** argv)
 		case 'm':
 			if(!lexicalCast(optarg, minSimilarity) || minSimilarity < 0.0f || minSimilarity > 1.0f)
 			{
-				std::cerr << "invalid min-similarity value: " << optarg << std::endl;
+				std::cerr << "ERROR: invalid min-similarity value: " << optarg << std::endl;
 				showHelp();
 				return 1;
 			}
@@ -538,7 +668,7 @@ int main(int argc, char** argv)
 		outStream.open(outFile, std::ios_base::out | std::ios_base::trunc);
 		if(!outStream.is_open())
 		{
-			std::cerr << "failed to open file: " << outFile << std::endl;
+			std::cerr << "ERROR: failed to open file: " << outFile << std::endl;
 		}
 	}
 
@@ -629,13 +759,13 @@ int main(int argc, char** argv)
 
 	if(source.empty())
 	{
-		std::cerr << "source file list is empty" << std::endl;
+		std::cerr << "ERROR: source file list is empty" << std::endl;
 		return 1;
 	}
 
 	if(destination.empty())
 	{
-		std::cerr << "destination file list is empty" << std::endl;
+		std::cerr << "ERROR: destination file list is empty" << std::endl;
 		return 1;
 	}
 
@@ -655,12 +785,15 @@ int main(int argc, char** argv)
 
 		size_t fileIndex = 0;
 
+		destinationDigestIndex.reserve(destination.size());
+
 		for(int i = 0; i < 2; ++i)
 		{
-			FileList& list = (i > 0) ? destination_storage : source;
+			const bool dest = (i > 0);
+			FileList& list = dest ? destination_storage : source;
 			for(auto& fi: list)
 			{
-				bool ok = fi.read();
+				bool ok = fi.read(dest);
 
 				if(&list == &destination && ok)
 				{
@@ -703,7 +836,7 @@ int main(int argc, char** argv)
 		{
 			auto& src = source[srcIndex];
 
-			if(!all && src.match)
+			if(!all && src.hasMatch())
 			{
 				// skip already matched file
 				continue;
@@ -714,7 +847,7 @@ int main(int argc, char** argv)
 			{
 				auto& dst = **dstIt;
 
-				if(src.name == dst.name)
+				if(src.name() == dst.name())
 				{
 					// don't compare the file with itself
 					continue;
@@ -722,19 +855,18 @@ int main(int argc, char** argv)
 
 				if(all)
 				{
-					out << "1|" << src.name << "|" << dst.name << std::endl;
+					out << "1|" << src.name() << "|" << dst.name() << std::endl;
 					matchesCount += 1;
 					continue;
 				}
 
-				if(dst.match)
+				if(dst.hasMatch())
 				{
 					// skip already processed file
 					continue;
 				}
 
-				bool added = src.addMatch(&dst, 1.0f);
-				assert(added);
+				src.addMatch(&dst, 1.0f);
 				matchesCount += 1;
 				break;
 			}
@@ -773,20 +905,20 @@ int main(int argc, char** argv)
 		{
 			auto& src = source[srcIndex];
 
-			if(textOnly && src.binary)
+			if(textOnly && src.isBinary())
 			{
 				// skip binaries
 				continue;
 			}
 
-			if(!all && src.matchSimilarity >= 1.0f)
+			if(!all && src.hasMatch(1.0f))
 			{
 				// skip files with exact match
 				continue;
 			}
 
-			SpanHash sourceHash;
-			if(!sourceHash.init(src.name.c_str(), src.binary))
+			bool clearSrcSpanHash = false;
+			if(!src.initSpanHash(&clearSrcSpanHash))
 			{
 				continue;
 			}
@@ -795,33 +927,33 @@ int main(int argc, char** argv)
 			{
 				auto& dst = destination[dstIndex];
 
-				if(textOnly && dst.binary)
+				if(textOnly && dst.isBinary())
 				{
 					// skip binaries
 					continue;
 				}
 
-				if(!all && dst.matchSimilarity >= 1.0f)
+				if(!all && dst.hasMatch(1.0f))
 				{
 					// skip files with exact match
 					continue;
 				}
 
-				if(src.digest == dst.digest)
+				if(src.digest() == dst.digest())
 				{
 					// skip exact matches
 					continue;
 				}
 
-				if(src.name == dst.name)
+				if(src.name() == dst.name())
 				{
 					// don't compare the file with itself
 					continue;
 				}
 
 				// check file sizes
-				const size_t minSize = std::min(src.size, dst.size);
-				const size_t maxSize = std::max(src.size, dst.size);
+				const size_t minSize = std::min(src.size(), dst.size());
+				const size_t maxSize = std::max(src.size(), dst.size());
 				const float maxSimilarity = static_cast<float>(minSize) / maxSize * 2.0f; // take LF & CRLF equivalence into account
 				if(maxSimilarity < minSimilarity)
 				{
@@ -829,20 +961,14 @@ int main(int argc, char** argv)
 					continue;
 				}
 
-				SpanHash destinationHash;
-				if(!destinationHash.init(dst.name.c_str(), dst.binary))
-				{
-					continue;
-				}
-
 				// exact matches were found before so these files can't be exactly the same
-				auto similarity = sourceHash.compare(destinationHash) * 0.99f;
+				auto similarity = src.spanHash().compare(dst.spanHash()) * 0.99f;
 
 				if(similarity >= minSimilarity)
 				{
 					if(all)
 					{
-						out << similarity << "|" << src.name << "|" << dst.name << std::endl;
+						out << similarity << "|" << src.name() << "|" << dst.name() << std::endl;
 						matchesCount += 1;
 					}
 					else
@@ -859,6 +985,11 @@ int main(int argc, char** argv)
 					progress.setCurrent(static_cast<float>(destination.size()) * srcIndex + dstIndex + 1);
 					progress.update();
 				}
+			}
+
+			if(clearSrcSpanHash)
+			{
+				src.clearSpanHash();
 			}
 		}
 
@@ -886,10 +1017,12 @@ int main(int argc, char** argv)
 		{
 			auto& src = source[srcIndex];
 
-			if(src.match)
+			float sim = 0.0f;
+			FileInfo* s = nullptr;
+			FileInfo* d = nullptr;
+			while(src.takeMatch(sim, s, d))
 			{
-				out << src.matchSimilarity << "|" << src.name << "|" << src.match->name << std::endl;
-				src.match->match = nullptr;
+				out << sim << "|" << s->name() << "|" << d->name() << std::endl;
 
 				if(showProgress)
 				{
