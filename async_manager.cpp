@@ -2,117 +2,217 @@
 
 #include <deque>
 #include <map>
+#include <vector>
 #include <string>
-#include <thread>
-#include <condition_variable>
-#include <mutex>
 #include <utility>
 #include <iostream>
+#include <thread>
+#include <condition_variable>
+#include <atomic>
+#include <mutex>
 
 
 namespace
 {
 
-	size_t getMaxWorkers()
+	class Event
 	{
-		size_t result = static_cast<size_t>(std::thread::hardware_concurrency());
+	public:
+		Event():
+			signaled_(false),
+			event_()
+		{
+		}
 
-		return std::max<size_t>(1, result);
-	}
+		void wait(std::unique_lock<std::mutex>& lock)
+		{
+			event_.wait(lock, [this]{ return signaled_; });
+		}
 
-	typedef std::map<std::thread::id, std::thread> Workers;
-	typedef std::multimap<std::string, Workers::iterator> WorkerGroups;
+		void set()
+		{
+			signaled_ = true;
+			event_.notify_all();
+		}
+
+	private:
+		bool signaled_;
+		std::condition_variable event_;
+
+	};
+
+	struct Task
+	{
+		Task(const AsyncManager::Task& task, const char* group, Event* started = nullptr):
+			task(task),
+			group(group),
+			started(started)
+		{
+		}
+
+		AsyncManager::Task task;
+		std::string group;
+		Event* started;
+	};
+
+	struct Group
+	{
+		Group():
+			tasks(0),
+			waiters(0),
+			finished()
+		{
+		}
+
+		template<class Rep, class Period>
+		bool wait_for(std::unique_lock<std::mutex>& lock, const std::chrono::duration<Rep, Period>& rel_time)
+		{
+			return finished.wait_for(lock, rel_time, [this]{ return tasks == 0; });
+		}
+
+		size_t tasks;
+		size_t waiters;
+		std::condition_variable finished;
+	};
+
+	typedef std::map<std::string, Group> Groups;
 
 	std::mutex s_asyncMutex;
-	size_t s_maxWorkers = getMaxWorkers();
-	Workers s_workers;
-	WorkerGroups s_workerGroups;
-	std::condition_variable s_asyncFinished;
+	std::vector<std::thread> s_workers;
+	Groups s_groups;
+	std::deque<Task> s_asyncQueue;
+	std::atomic<bool> s_asyncStop(false);
+	std::condition_variable s_asyncWorkerAttention;
 
 	std::mutex s_syncMutex;
-	std::deque<AsyncManager::Operation> s_syncQueue;
+	std::deque<AsyncManager::Task> s_syncQueue;
 
-	template<typename Extractor>
-	void joinWorkers(const Extractor& extractor)
+	void worker()
 	{
 		while(true)
 		{
-			std::thread worker;
+			AsyncManager::Task task;
+			std::string group;
 
 			{
-				std::lock_guard<std::mutex> guard(s_asyncMutex);
+				// take task
+				std::unique_lock<std::mutex> lock(s_asyncMutex);
 
-				auto groupsIt = extractor();
-				if(groupsIt == s_workerGroups.end())
+				while(true)
 				{
-					break;
-				}
+					if(s_asyncStop.load())
+					{
+						return;
+					}
 
-				worker = std::move(groupsIt->second->second);
-				s_workers.erase(groupsIt->second);
-				s_workerGroups.erase(groupsIt);
+					if(!s_asyncQueue.empty())
+					{
+						auto& t = s_asyncQueue.front();
+
+						// extract task
+						task.swap(t.task);
+						group.swap(t.group);
+
+						// add it to the corresponding group
+						s_groups[group].tasks += 1;
+
+						if(t.started)
+						{
+							t.started->set();
+						}
+
+						s_asyncQueue.pop_front();
+
+						break;
+					}
+
+					s_asyncWorkerAttention.wait(lock);
+				}
 			}
 
-			worker.join();
+			// start task
+			task();
 
-			AsyncManager::tick();
+			{
+				// clean up
+				std::unique_lock<std::mutex> lock(s_asyncMutex);
+
+				auto groupIt = s_groups.find(group);
+
+				if(groupIt != s_groups.end())
+				{
+					auto& g = groupIt->second;
+					if(g.tasks > 0)
+					{
+						g.tasks -= 1;
+					}
+
+					if(g.tasks == 0)
+					{
+						if(g.waiters > 0)
+						{
+							g.finished.notify_all();
+						}
+						else
+						{
+							s_groups.erase(groupIt);
+						}
+					}
+				}
+			}
 		}
-
-		AsyncManager::tick();
 	}
 
-	class CleanUp
+	void initWorkers()
+	{
+		if(!s_workers.empty())
+		{
+			return;
+		}
+
+		const size_t count = std::max<size_t>(1, std::thread::hardware_concurrency());
+		s_workers.reserve(count);
+		for(size_t i = 0; i != count; ++i)
+		{
+			s_workers.emplace_back(&worker);
+		}
+	}
+
+	void asyncTick(std::unique_lock<std::mutex>& lock)
+	{
+		lock.unlock();
+		AsyncManager::tick();
+		lock.lock();
+	}
+
+	void syncTask(std::unique_lock<std::mutex>& lock, Group& group)
+	{
+		group.waiters += 1;
+		while(!group.wait_for(lock, std::chrono::milliseconds(100)))
+		{
+			asyncTick(lock);
+		}
+		group.waiters -= 1;
+	}
+
+	class Unit
 	{
 	public:
-		~CleanUp()
+		~Unit()
 		{
-			// don't allow more workers to be added
-			s_maxWorkers = 0;
+			// stop all workers
+			s_asyncStop.store(true);
 
-			// join all workers
-			AsyncManager::joinAll();
+			s_asyncWorkerAttention.notify_all();
+
+			for(auto& worker: s_workers)
+			{
+				worker.join();
+			}
 		}
 	};
 
-	CleanUp s_cleanUp;
-
-	void startWorker(const std::string& group, const AsyncManager::Operation& operation)
-	{
-		std::thread worker([=]()
-		{
-			// perform effective work
-			if(operation)
-			{
-				operation();
-			}
-
-			// cleanup
-			std::lock_guard<std::mutex> guard(s_asyncMutex);
-
-			// remove self
-			auto workersIt = s_workers.find(std::this_thread::get_id());
-			if(workersIt != s_workers.end())
-			{
-				auto groupRange = s_workerGroups.equal_range(group);
-				for(auto groupsIt = groupRange.first; groupsIt != groupRange.second; ++groupsIt)
-				{
-					if(groupsIt->second == workersIt)
-					{
-						s_workerGroups.erase(groupsIt);
-						break;
-					}
-				}
-
-				workersIt->second.detach();
-				s_workers.erase(workersIt);
-			}
-
-			s_asyncFinished.notify_one();
-		});
-
-		auto it = s_workers.emplace(worker.get_id(), std::move(worker)).first;
-		s_workerGroups.emplace(group, it);
-	}
+	Unit s_unit;
 
 }
 
@@ -120,78 +220,96 @@ namespace
 namespace AsyncManager
 {
 
-	void async(const char* group, const Operation& operation)
+	void async(const char* group, bool allowQueue, const Task& task)
 	{
+		if(!task)
+		{
+			return;
+		}
+
+		initWorkers();
+
 		if(!group)
 		{
 			group = "";
 		}
 
-		auto pred = []
+		std::unique_lock<std::mutex> lock(s_asyncMutex);
+
+		if(allowQueue)
 		{
-			return s_workers.size() < s_maxWorkers;
-		};
-
-		std::unique_lock<std::mutex> guard(s_asyncMutex);
-
-		s_asyncFinished.wait(guard, []
+			s_asyncQueue.emplace_back(task, group, nullptr);
+			s_asyncWorkerAttention.notify_one();
+		}
+		else
 		{
-			return s_workers.size() < s_maxWorkers;
-		});
-
-		startWorker(group, operation);
+			Event started;
+			s_asyncQueue.emplace_back(task, group, &started);
+			s_asyncWorkerAttention.notify_one();
+			started.wait(lock);
+		}
 	}
 
-	void joinGroup(const char* group)
+	void sync(const char* group)
 	{
-		const std::string g = group ? group : "";
+		std::unique_lock<std::mutex> lock(s_asyncMutex);
 
-		joinWorkers([&]
+		auto groupIt = s_groups.find(group ? group : "");
+		if(groupIt != s_groups.end())
 		{
-			auto range = s_workerGroups.equal_range(g);
-			if(range.first != range.second)
+			syncTask(lock, groupIt->second);
+			s_groups.erase(groupIt);
+		}
+	}
+
+	void syncAll()
+	{
+		std::unique_lock<std::mutex> lock(s_asyncMutex);
+
+		while(true)
+		{
+			asyncTick(lock);
+
+			auto groupIt = s_groups.begin();
+			if(groupIt == s_groups.end())
 			{
-				return range.first;
+				break;
 			}
-			else
-			{
-				return s_workerGroups.end();
-			}
-		});
+
+			syncTask(lock, groupIt->second);
+			s_groups.erase(groupIt);
+		}
 	}
 
-	void joinAll()
+	void sync(const Task& task)
 	{
-		joinWorkers([]{ return s_workerGroups.begin(); });
-	}
+		if(!task)
+		{
+			return;
+		}
 
-	void sync(const Operation& operation)
-	{
-		std::lock_guard<std::mutex> guard(s_syncMutex);
-		s_syncQueue.push_back(operation);
+		std::lock_guard<std::mutex> lock(s_syncMutex);
+		s_syncQueue.push_back(task);
 	}
 
 	void tick()
 	{
 		while(true)
 		{
-			Operation operation;
+			Task task;
 
 			{
-				std::lock_guard<std::mutex> guard(s_syncMutex);
+				std::lock_guard<std::mutex> lock(s_syncMutex);
 				if(s_syncQueue.empty())
 				{
 					break;
 				}
 
-				operation = s_syncQueue.front();
+				task = std::move(s_syncQueue.front());
 				s_syncQueue.pop_front();
 			}
 
-			if(operation)
-			{
-				operation();
-			}
+			task();
 		}
 	}
 

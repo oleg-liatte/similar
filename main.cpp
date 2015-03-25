@@ -978,7 +978,7 @@ int main(int argc, char** argv)
 					continue;
 				}
 
-				AsyncManager::async([&, srcIndex, dstIndex]
+				AsyncManager::async(false, [&, srcIndex, dstIndex]
 				{
 					// exact matches were found before so these files can't be exactly the same
 					auto similarity = src.spanHash().compare(dst.spanHash()) * 0.99f;
@@ -1019,7 +1019,7 @@ int main(int argc, char** argv)
 			src.releaseSpanHash(); // release extra reference
 		}
 
-		AsyncManager::joinAll();
+		AsyncManager::syncAll();
 
 		if(showProgress)
 		{
